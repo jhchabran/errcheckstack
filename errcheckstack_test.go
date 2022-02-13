@@ -35,9 +35,6 @@ OUTER:
 				t.Fatalf("cannot run on non-directory: %s", f.Name())
 			}
 
-			// dirPath, err := filepath.Abs(path.Join("./testdata", f.Name()))
-			// assert.NoError(t, err)
-
 			analysistest.Run(t, analysistest.TestData(), NewAnalyzer(), f.Name())
 		})
 	}
