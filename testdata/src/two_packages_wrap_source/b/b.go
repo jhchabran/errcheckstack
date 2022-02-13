@@ -11,4 +11,5 @@ func B() error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
+	return nil
 }

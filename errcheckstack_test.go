@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	_ "github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/tools/go/analysis/analysistest"
 )
@@ -13,6 +14,7 @@ var vendoredDeps []string = []string{
 	"github.com",
 	"golang.org",
 	"gopkg.in",
+	"modules.txt",
 }
 
 func TestAnalyzer(t *testing.T) {
