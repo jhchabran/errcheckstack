@@ -31,13 +31,12 @@ OUTER:
 				continue OUTER
 			}
 		}
+		if !f.IsDir() {
+			t.Fatalf("cannot run on non-directory: %s", f.Name())
+		}
 
 		t.Run(f.Name(), func(t *testing.T) {
-			if !f.IsDir() {
-				t.Fatalf("cannot run on non-directory: %s", f.Name())
-			}
-
-			analysistest.Run(t, analysistest.TestData(), NewAnalyzer(), f.Name())
+			analysistest.Run(t, analysistest.TestData(), NewAnalyzer(), f.Name()+"/...")
 		})
 	}
 }

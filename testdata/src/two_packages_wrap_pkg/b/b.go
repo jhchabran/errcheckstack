@@ -1,7 +1,14 @@
 package b
 
-import "two_packages_wrap_pkg/a"
+import (
+	"fmt"
+	"two_packages_wrap_pkg/a"
+)
 
 func B() error {
-	return a.A() // want `error returned from external package is unwrapped`
+	return a.A()
+}
+
+func Canary() error {
+	return fmt.Errorf("canary") // want `error returned from external package is unwrapped`
 }

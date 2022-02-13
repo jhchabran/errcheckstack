@@ -1,7 +1,8 @@
 package main
 
-import "two_packages_no_wrap/a"
+import "two_packages_wrap_pkg/b"
 
 func main() {
-	a.A()
+	b.B()
+	b.Canary()
 }

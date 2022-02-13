@@ -1,7 +1,9 @@
 package a
 
-import "errors"
+import (
+	"fmt"
+)
 
 func A() error {
-	return errors.New("foo") // want `error returned from external package is unwrapped`
+	return fmt.Errorf("foo")
 }

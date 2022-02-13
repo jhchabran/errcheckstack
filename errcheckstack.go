@@ -22,6 +22,7 @@ func run() func(*analysis.Pass) (interface{}, error) {
 	return func(pass *analysis.Pass) (interface{}, error) {
 		for _, file := range pass.Files {
 			ast.Inspect(file, func(n ast.Node) bool {
+				fmt.Println(file.Name.Name)
 				ret, ok := n.(*ast.ReturnStmt)
 				if !ok {
 					return true

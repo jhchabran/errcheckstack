@@ -1,7 +1,12 @@
 package a
 
-import "errors"
+import (
+	"fmt"
+
+	"github.com/cockroachdb/errors"
+)
 
 func A() error {
-	return errors.New("foo") // want `error returned from external package is unwrapped`
+	err := fmt.Errorf("foo")
+	return errors.WithStack(err)
 }
