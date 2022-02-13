@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/jhchabran/errcheckstack/errcheckstack"
+	"github.com/jhchabran/errcheckstack"
 	"golang.org/x/tools/go/analysis/singlechecker"
 )
 

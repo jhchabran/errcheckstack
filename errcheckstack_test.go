@@ -2,7 +2,6 @@ package errcheckstack
 
 import (
 	"io/ioutil"
-	"path"
 	"path/filepath"
 	"testing"
 
@@ -11,7 +10,7 @@ import (
 )
 
 func TestAnalyzer(t *testing.T) {
-	p, err := filepath.Abs("./testdata")
+	p, err := filepath.Abs("./testdata/src")
 	assert.NoError(t, err)
 
 	files, err := ioutil.ReadDir(p)
@@ -23,10 +22,10 @@ func TestAnalyzer(t *testing.T) {
 				t.Fatalf("cannot run on non-directory: %s", f.Name())
 			}
 
-			dirPath, err := filepath.Abs(path.Join("./testdata", f.Name()))
-			assert.NoError(t, err)
+			// dirPath, err := filepath.Abs(path.Join("./testdata", f.Name()))
+			// assert.NoError(t, err)
 
-			analysistest.Run(t, dirPath, NewAnalyzer())
+			analysistest.Run(t, analysistest.TestData(), NewAnalyzer(), f.Name())
 		})
 	}
 }
