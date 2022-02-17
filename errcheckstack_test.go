@@ -26,6 +26,10 @@ func TestAnalyzer(t *testing.T) {
 
 OUTER:
 	for _, f := range files {
+		if f.Name() != "two_packages_wrap_source" {
+			// if f.Name() != "two_packages_no_wrap" {
+			continue
+		}
 		for _, v := range vendoredDeps {
 			if f.Name() == v {
 				continue OUTER
