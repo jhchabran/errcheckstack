@@ -3,16 +3,10 @@ package b
 import (
 	"fmt"
 	"two_packages_wrap_source/a"
-
-	"github.com/cockroachdb/errors"
 )
 
 func B() error {
-	err := a.A()
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	return nil
+	return a.A()
 }
 
 func Canary() error {

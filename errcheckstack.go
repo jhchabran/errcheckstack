@@ -3,10 +3,8 @@ package errcheckstack
 import (
 	"fmt"
 	"go/ast"
-	"go/printer"
 	"go/token"
 	"go/types"
-	"os"
 	"reflect"
 	"strings"
 
@@ -169,45 +167,50 @@ func scanErrorReturningFunctions(pass *analysis.Pass, res *Result) (interface{},
 					var call *ast.CallExpr
 
 					// Attempt to find the most recent short assign
-					if shortAss := prevErrAssign(pass, file, ident); shortAss != nil {
-						call, ok = shortAss.Rhs[0].(*ast.CallExpr)
-						if !ok {
+					assignments := prevErrAssign(pass, file, ident)
+					for _, shortAss := range assignments {
+						if shortAss != nil {
+							call, ok = shortAss.Rhs[0].(*ast.CallExpr)
+							if !ok {
+								return true
+							}
+							b := checkUnwrapped(pass, call, ident.NamePos)
+							fn := extractFunc(pass.TypesInfo, call.Fun)
+							fmt.Println(lastFdecl.fdecl.Name)
+							fmt.Println(fn.String())
+							lastFdecl.errSources = append(lastFdecl.errSources, &errorSource{wrapped: b, n: n, fn: fn})
+						} else if isUnresolved(file, ident) {
+							// TODO Check if the identifier is unresolved, and try to resolve it in
+							// another file.
+							fmt.Println("unresolved", file)
 							return true
-						}
-						b := checkUnwrapped(pass, call, ident.NamePos)
-						fn := extractFunc(pass.TypesInfo, call.Fun)
-						lastFdecl.errSources = append(lastFdecl.errSources, &errorSource{wrapped: b, n: n, fn: fn})
-					} else if isUnresolved(file, ident) {
-						// TODO Check if the identifier is unresolved, and try to resolve it in
-						// another file.
-						fmt.Println("unresolved", file)
-						return true
-					} else {
-						// Check for ValueSpec nodes in order to locate a possible var
-						// declaration.
-						if ident.Obj == nil {
-							return true
-						}
+						} else {
+							// Check for ValueSpec nodes in order to locate a possible var
+							// declaration.
+							if ident.Obj == nil {
+								return true
+							}
 
-						vSpec, ok := ident.Obj.Decl.(*ast.ValueSpec)
-						if !ok {
-							// We couldn't find a short or var assign for this error return.
-							// This is an error. Where did this identifier come from? Possibly a
-							// function param.
-							//
-							// TODO decide how to handle this case, whether to follow function
-							// param back, or assert wrapping at call site.
+							vSpec, ok := ident.Obj.Decl.(*ast.ValueSpec)
+							if !ok {
+								// We couldn't find a short or var assign for this error return.
+								// This is an error. Where did this identifier come from? Possibly a
+								// function param.
+								//
+								// TODO decide how to handle this case, whether to follow function
+								// param back, or assert wrapping at call site.
 
-							return true
-						}
+								return true
+							}
 
-						if len(vSpec.Values) < 1 {
-							return true
-						}
+							if len(vSpec.Values) < 1 {
+								return true
+							}
 
-						call, ok = vSpec.Values[0].(*ast.CallExpr)
-						if !ok {
-							return true
+							call, ok = vSpec.Values[0].(*ast.CallExpr)
+							if !ok {
+								return true
+							}
 						}
 					}
 
@@ -234,258 +237,23 @@ func scanErrorReturningFunctions(pass *analysis.Pass, res *Result) (interface{},
 	return nil, nil
 }
 
-func isWrapped(pass *analysis.Pass, file *ast.File, nn *ast.FuncDecl) bool {
-	var found bool
-	var wrapped bool
-	ast.Inspect(file, func(n ast.Node) bool {
-		// Locate the function declaration for further inspection
-		if !found {
-			fdecl, ok := n.(*ast.FuncDecl)
-			if !ok {
-				return true
-			}
-			if fdecl != nn {
-				return false
-			}
-
-			fmt.Printf("\n------ (%s):%s\n", file.Name.Name, nn.Name.Name)
-			printer.Fprint(os.Stdout, token.NewFileSet(), n)
-			fmt.Printf("\n------\n")
-
-			found = true
-			return true
-		}
-
-		ret, ok := n.(*ast.ReturnStmt)
-		if !ok {
-			return true
-		}
-		// TODO we probably never get this, as we're sure we're in an error returning func
-		if len(ret.Results) < 1 {
-			return true
-		}
-
-		// Iterate over the values to be returned looking for errors
-		for _, expr := range ret.Results {
-			// Check if the return expression is a function call, if it is, we need
-			// to handle it by checking the return params of the function.
-			retFn, ok := expr.(*ast.CallExpr)
-			if ok {
-				// If the return type of the function is a single error. This will not
-				// match an error within multiple return values, for that, the below
-				// tuple check is required.
-				if isError(pass.TypesInfo.TypeOf(expr)) {
-					// check if wrapped
-					wrapped = checkUnwrapped(pass, retFn, retFn.Pos())
-					return true
-				}
-
-				// Check if one of the return values from the function is an error
-				tup, ok := pass.TypesInfo.TypeOf(expr).(*types.Tuple)
-				if !ok {
-					return true
-				}
-
-				// Iterate over the return values of the function looking for error
-				// types
-				for i := 0; i < tup.Len(); i++ {
-					v := tup.At(i)
-					if v == nil {
-						return true
-					}
-					if isError(v.Type()) {
-						// check if wrapped
-						wrapped = checkUnwrapped(pass, retFn, retFn.Pos())
-						return true
-					}
-				}
-			}
-
-			if !isError(pass.TypesInfo.TypeOf(expr)) {
-				continue
-			}
-
-			ident, ok := expr.(*ast.Ident)
-			if !ok {
-				return true
-			}
-
-			// Attempt to find the most recent short assign
-			var call *ast.CallExpr
-			if shortAss := prevErrAssign(pass, file, ident); shortAss != nil {
-				call, ok = shortAss.Rhs[0].(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-			} else if isUnresolved(file, ident) {
-				// TODO Check if the identifier is unresolved, and try to resolve it in
-				// another file.
-				return true
-			} else {
-				// Check for ValueSpec nodes in order to locate a possible var
-				// declaration.
-				if ident.Obj == nil {
-					return true
-				}
-
-				vSpec, ok := ident.Obj.Decl.(*ast.ValueSpec)
-				if !ok {
-					// We couldn't find a short or var assign for this error return.
-					// This is an error. Where did this identifier come from? Possibly a
-					// function param.
-					//
-					// TODO decide how to handle this case, whether to follow function
-					// param back, or assert wrapping at call site.
-					return true
-				}
-
-				if len(vSpec.Values) < 1 {
-					return true
-				}
-
-				call, ok = vSpec.Values[0].(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-			}
-
-			// make sure there is a call identified as producing the error being
-			// returned, otherwise just bail
-			if call == nil {
-				return true
-			}
-
-			checkUnwrapped(pass, call, ident.NamePos)
-		}
-
-		return true
-
-	})
-	return wrapped
-}
-
 // scanNonRecursivelyWrappedFunctions uses the results from scanErrorReturningFunctions to
 // eliminate from the results functions which have their errors wrapped in the call tree.
 func scanNonRecursivelyWrappedFunctions(pass *analysis.Pass, res *Result) (interface{}, error) {
 	for fn, w := range res.funcs {
-		// fn, _ := pass.TypesInfo.Defs[v.fdecl.Name].(*types.Func)
-		// res.funcs[fn] = v.IsWrapped()
-		fmt.Println(fn.String(), w.String())
+		fmt.Println(fn.FullName(), w.String())
+		fmt.Printf("%#v\n\n", fn)
 	}
-	return nil, nil
-}
 
-func runOld() func(*analysis.Pass) (interface{}, error) {
-	return func(pass *analysis.Pass) (interface{}, error) {
-		for _, file := range pass.Files {
-			ast.Inspect(file, func(n ast.Node) bool {
-				ret, ok := n.(*ast.ReturnStmt)
-				if !ok {
-					return true
-				}
-				if len(ret.Results) < 1 {
-					return true
-				}
-
-				// Iterate over the values to be returned looking for errors
-				for _, expr := range ret.Results {
-					// Check if the return expression is a function call, if it is, we need
-					// to handle it by checking the return params of the function.
-					retFn, ok := expr.(*ast.CallExpr)
-					if ok {
-						// If the return type of the function is a single error. This will not
-						// match an error within multiple return values, for that, the below
-						// tuple check is required.
-						if isError(pass.TypesInfo.TypeOf(expr)) {
-							// check if wrapped
-							reportUnwrapped(pass, retFn, retFn.Pos())
-							return true
-						}
-
-						// Check if one of the return values from the function is an error
-						tup, ok := pass.TypesInfo.TypeOf(expr).(*types.Tuple)
-						if !ok {
-							return true
-						}
-
-						// Iterate over the return values of the function looking for error
-						// types
-						for i := 0; i < tup.Len(); i++ {
-							v := tup.At(i)
-							if v == nil {
-								return true
-							}
-							if isError(v.Type()) {
-								// check if wrapped
-								reportUnwrapped(pass, retFn, retFn.Pos())
-								return true
-							}
-						}
-					}
-
-					if !isError(pass.TypesInfo.TypeOf(expr)) {
-						continue
-					}
-
-					ident, ok := expr.(*ast.Ident)
-					if !ok {
-						return true
-					}
-
-					// Attempt to find the most recent short assign
-					var call *ast.CallExpr
-					if shortAss := prevErrAssign(pass, file, ident); shortAss != nil {
-						call, ok = shortAss.Rhs[0].(*ast.CallExpr)
-						if !ok {
-							return true
-						}
-					} else if isUnresolved(file, ident) {
-						// TODO Check if the identifier is unresolved, and try to resolve it in
-						// another file.
-						return true
-					} else {
-						// Check for ValueSpec nodes in order to locate a possible var
-						// declaration.
-						if ident.Obj == nil {
-							return true
-						}
-
-						vSpec, ok := ident.Obj.Decl.(*ast.ValueSpec)
-						if !ok {
-							// We couldn't find a short or var assign for this error return.
-							// This is an error. Where did this identifier come from? Possibly a
-							// function param.
-							//
-							// TODO decide how to handle this case, whether to follow function
-							// param back, or assert wrapping at call site.
-							return true
-						}
-
-						if len(vSpec.Values) < 1 {
-							return true
-						}
-
-						call, ok = vSpec.Values[0].(*ast.CallExpr)
-						if !ok {
-							return true
-						}
-					}
-
-					// make sure there is a call identified as producing the error being
-					// returned, otherwise just bail
-					if call == nil {
-						return true
-					}
-
-					reportUnwrapped(pass, call, ident.NamePos)
-					// fmt.Println(call)
-				}
-
-				return true
-			})
+	for fn := range res.funcs {
+		if !isWrappedAtSource(fn, res) {
+			fmt.Println("NOK ", fn.FullName(), "is returning unwrapped error")
+		} else {
+			fmt.Println("OK  ", fn.FullName(), "is good")
 		}
-		return nil, nil
 	}
+
+	return nil, nil
 }
 
 // isError returns whether or not the provided type interface is an error
@@ -600,6 +368,31 @@ func isFromOtherPkg(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
 	return true
 }
 
+func isWrappedAtSource(fn *types.Func, res *Result) bool {
+	fmt.Println("inspecting", fn.FullName())
+	w, ok := res.funcs[fn]
+	if !ok {
+		fmt.Println("did not find", fn.FullName())
+		fmt.Printf("%#v\n", fn)
+		return false
+	}
+
+	// Search in error sources until we find a non wrapped error, if any.
+	for _, es := range w.errSources {
+		if !es.wrapped {
+			if _, ok := res.funcs[es.fn]; ok {
+				// The source function is not from any files in the pass and not wrapped.
+				return false
+			} else {
+				b := isWrappedAtSource(es.fn, res)
+				fmt.Println("found call to", es.fn.FullName(), b)
+				return b
+			}
+		}
+	}
+	return true
+}
+
 // prevErrAssign traverses the AST of a file looking for the most recent
 // assignment to an error declaration which is specified by the returnIdent
 // identifier.
@@ -607,7 +400,7 @@ func isFromOtherPkg(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
 // This only returns short form assignments and reassignments, e.g. `:=` and
 // `=`. This does not include `var` statements. This function will return nil if
 // the only declaration is a `var` (aka ValueSpec) declaration.
-func prevErrAssign(pass *analysis.Pass, file *ast.File, returnIdent *ast.Ident) *ast.AssignStmt {
+func prevErrAssign(pass *analysis.Pass, file *ast.File, returnIdent *ast.Ident) []*ast.AssignStmt {
 	// A slice containing all the assignments which contain an identifer
 	// referring to the source declaration of the error. This is to catch
 	// cases where err is defined once, and then reassigned multiple times
@@ -639,16 +432,17 @@ func prevErrAssign(pass *analysis.Pass, file *ast.File, returnIdent *ast.Ident) 
 
 	// Iterate through the assignments, comparing the token positions to
 	// find the assignment that directly precedes the return position
-	var mostRecentAssign *ast.AssignStmt
+	// var mostRecentAssign *ast.AssignStmt
+	//
+	// for _, ass := range assigns {
+	// 	if ass.Pos() > returnIdent.Pos() {
+	// 		break
+	// 	}
+	// 	mostRecentAssign = ass
+	// }
 
-	for _, ass := range assigns {
-		if ass.Pos() > returnIdent.Pos() {
-			break
-		}
-		mostRecentAssign = ass
-	}
-
-	return mostRecentAssign
+	// return mostRecentAssign
+	return assigns
 }
 
 func contains(slice []string, el string) bool {
