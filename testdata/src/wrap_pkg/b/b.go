@@ -3,10 +3,16 @@ package b
 import (
 	"fmt"
 	"wrap_pkg/a"
+
+	"github.com/cockroachdb/errors"
 )
 
 func B() error { // want B:"wrapped"
-	return a.A()
+	err := a.A()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
 }
 
 func Canary() error { // want Canary:"unwrapped"
