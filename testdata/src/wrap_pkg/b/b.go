@@ -2,7 +2,7 @@ package b
 
 import (
 	"fmt"
-	"two_packages_wrap_pkg/a"
+	"wrap_pkg/a"
 )
 
 func B() error {

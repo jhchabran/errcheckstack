@@ -1,6 +1,6 @@
 package main
 
-import "two_packages_wrap_source/b"
+import "wrap_pkg/b"
 
 func main() {
 	b.B()

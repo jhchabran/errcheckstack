@@ -2,7 +2,7 @@ package b
 
 import (
 	"fmt"
-	"two_packages_wrap_source/a"
+	"wrap_source/a"
 )
 
 func B() error { // want B:"wrapped"
