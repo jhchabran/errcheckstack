@@ -19,7 +19,7 @@ var Analyzer = &analysis.Analyzer{
 	Doc:        "Checks that errors are wrapped before reaching main functions",
 	Run:        run(),
 	ResultType: reflect.TypeOf(&Result{}),
-	FactTypes:  []analysis.Fact{new(isWrapped)},
+	FactTypes:  []analysis.Fact{new(wrapFact)},
 }
 
 var moduleName string
@@ -28,9 +28,11 @@ func init() {
 	Analyzer.Flags.StringVar(&moduleName, "module", moduleName, "module to analyze")
 }
 
-type isWrapped struct{}
+type wrapFact struct {
+	isWrapped bool
+}
 
-func (w isWrapped) AFact() {}
+func (w wrapFact) AFact() {}
 
 type Result struct {
 	funcs map[string]*wrappedCall
@@ -177,6 +179,10 @@ func scanErrorReturningFunctions(pass *analysis.Pass, res *Result) (interface{},
 						if isError(pass.TypesInfo.TypeOf(expr)) {
 							b := checkUnwrapped(pass, retFn, retFn.Pos())
 							fn := extractFunc(pass.TypesInfo, retFn.Fun)
+							ffn, ok := pass.TypesInfo.ObjectOf(lastFdecl.fdecl.Name).(*types.Func)
+							if ok {
+								pass.ExportObjectFact(ffn, &wrapFact{isWrapped: b})
+							}
 							lastFdecl.errSources = append(lastFdecl.errSources, &errorSource{wrapped: b, n: n, fn: fn})
 							return true
 						}
@@ -203,9 +209,10 @@ func scanErrorReturningFunctions(pass *analysis.Pass, res *Result) (interface{},
 							}
 							b := checkUnwrapped(pass, call, ident.NamePos)
 							fn := extractFunc(pass.TypesInfo, call.Fun)
-							fmt.Println(lastFdecl.fdecl.Name)
-							fmt.Println(fn.String())
+							// fmt.Println(lastFdecl.fdecl.Name)
+							// fmt.Println(fn.String())
 							lastFdecl.errSources = append(lastFdecl.errSources, &errorSource{wrapped: b, n: n, fn: fn})
+							pass.ExportObjectFact(fn, &wrapFact{isWrapped: b})
 						} else if isUnresolved(file, ident) {
 							// TODO Check if the identifier is unresolved, and try to resolve it in
 							// another file.
@@ -249,6 +256,7 @@ func scanErrorReturningFunctions(pass *analysis.Pass, res *Result) (interface{},
 					b := checkUnwrapped(pass, call, ident.NamePos)
 					fn := extractFunc(pass.TypesInfo, call.Fun)
 					lastFdecl.errSources = append(lastFdecl.errSources, &errorSource{wrapped: b, n: n, fn: fn})
+					pass.ExportObjectFact(fn, &wrapFact{isWrapped: b})
 				}
 			}
 
@@ -267,6 +275,7 @@ func scanErrorReturningFunctions(pass *analysis.Pass, res *Result) (interface{},
 // scanNonRecursivelyWrappedFunctions uses the results from scanErrorReturningFunctions to
 // eliminate from the results functions which have their errors wrapped in the call tree.
 func scanNonRecursivelyWrappedFunctions(pass *analysis.Pass, res *Result) (interface{}, error) {
+
 	for fn, w := range res.funcs {
 		fmt.Println(fn, w.String())
 		fmt.Printf("%#v\n\n", fn)
@@ -278,7 +287,7 @@ func scanNonRecursivelyWrappedFunctions(pass *analysis.Pass, res *Result) (inter
 	fmt.Println("res-end")
 
 	for fn := range res.funcs {
-		if !isWrappedAtSource(fn, res) {
+		if !isWrappedAtSource(pass, fn, res) {
 			fmt.Println("NOK ", fn, "is returning unwrapped error")
 		} else {
 			fmt.Println("OK  ", fn, "is good")
@@ -302,9 +311,15 @@ func checkUnwrapped(pass *analysis.Pass, call *ast.CallExpr, tokenPos token.Pos)
 	if !ok {
 		return false
 	}
-
-	fnSig := pass.TypesInfo.ObjectOf(sel.Sel).String()
+	fn := pass.TypesInfo.ObjectOf(sel.Sel).(*types.Func)
+	fnSig := fn.String()
 	if fnSig == "func github.com/cockroachdb/errors.WithStack(err error) error" {
+		return true
+	}
+
+	fact := wrapFact{}
+	pass.ImportObjectFact(fn, &fact)
+	if fact.isWrapped {
 		return true
 	}
 
@@ -400,7 +415,7 @@ func isFromOtherPkg(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
 	return true
 }
 
-func isWrappedAtSource(fn string, res *Result) bool {
+func isWrappedAtSource(pass *analysis.Pass, fn string, res *Result) bool {
 	fmt.Println("inspecting", fn)
 	w, ok := res.funcs[fn]
 	if !ok {
@@ -416,7 +431,7 @@ func isWrappedAtSource(fn string, res *Result) bool {
 				// The source function is not from any files in the pass and not wrapped.
 				return false
 			} else {
-				b := isWrappedAtSource(es.fn.FullName(), res)
+				b := isWrappedAtSource(pass, es.fn.FullName(), res)
 				fmt.Println("found call to", es.fn.FullName(), b)
 				return b
 			}
