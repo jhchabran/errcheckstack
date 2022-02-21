@@ -34,6 +34,14 @@ type wrapFact struct {
 
 func (w wrapFact) AFact() {}
 
+func (w wrapFact) String() string {
+	if w.isWrapped {
+		return "wrapped"
+	} else {
+		return "unwrapped"
+	}
+}
+
 type Result struct {
 	funcs map[string]*wrappedCall
 }
@@ -178,10 +186,13 @@ func scanErrorReturningFunctions(pass *analysis.Pass, res *Result) (interface{},
 						// tuple check is required.
 						if isError(pass.TypesInfo.TypeOf(expr)) {
 							b := checkUnwrapped(pass, retFn, retFn.Pos())
+							if !b {
+								pass.Reportf(retFn.Pos(), "is not wrapped")
+							}
 							fn := extractFunc(pass.TypesInfo, retFn.Fun)
 							ffn, ok := pass.TypesInfo.ObjectOf(lastFdecl.fdecl.Name).(*types.Func)
 							if ok {
-								pass.ExportObjectFact(ffn, &wrapFact{isWrapped: b})
+								pass.ExportObjectFact(ffn, &wrapFact{isWrapped: b && lastFdecl.IsWrapped()})
 							}
 							lastFdecl.errSources = append(lastFdecl.errSources, &errorSource{wrapped: b, n: n, fn: fn})
 							return true
