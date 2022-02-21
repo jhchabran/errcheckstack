@@ -152,7 +152,7 @@ func scan(cfg *Config, pass *analysis.Pass) (interface{}, error) {
 						if isError(pass.TypesInfo.TypeOf(expr)) {
 							b := checkUnwrapped(cfg, pass, retFn, retFn.Pos())
 							if !b {
-								pass.Reportf(retFn.Pos(), "error returned is not wrapped")
+								reportUnwrapped(pass, retFn, retFn.Pos())
 							}
 							fn := extractFunc(pass.TypesInfo, retFn.Fun)
 							callerFn, ok := pass.TypesInfo.ObjectOf(curFdecl.fdecl.Name).(*types.Func)
@@ -259,6 +259,8 @@ func checkUnwrapped(cfg *Config, pass *analysis.Pass, call *ast.CallExpr, tokenP
 	if !ok {
 		return false
 	}
+
+	// Check if that function call is part of the wrapping functions.
 	fn := pass.TypesInfo.ObjectOf(sel.Sel).(*types.Func)
 	for _, fullname := range cfg.WrappingSignatures {
 		if fn.FullName() == fullname {
@@ -266,29 +268,22 @@ func checkUnwrapped(cfg *Config, pass *analysis.Pass, call *ast.CallExpr, tokenP
 		}
 	}
 
+	// Check if that function call is marked as wrapped by a previous pass.
 	fact := wrapFact{}
 	pass.ImportObjectFact(fn, &fact)
 	if fact.isWrapped {
 		return true
 	}
 
-	// Check for ignored signatures
-	// fnSig := pass.TypesInfo.ObjectOf(sel.Sel).String()
-	// if contains(cfg.IgnoreSigs, fnSig) {
-	// 	return
-	// } else if containsMatch(cfg.IgnoreSigRegexps, fnSig) {
-	// 	return
-	// }
-
 	// Check if the underlying type of the "x" in x.y.z is an interface, as
 	// errors returned from interface types should be wrapped.
 	if isInterface(pass, sel) {
+		// TODO
 		return true
 	}
 
 	// Check whether the function being called comes from another package,
-	// as functions called across package boundaries which returns errors
-	// should be wrapped
+	// that is not part of the analysis and therefore should be wrapped.
 	if isFromOtherPkg(pass, sel) {
 		return false
 	}
@@ -307,22 +302,6 @@ func isFromOtherPkg(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
 	// The package of the function that we are calling which returns the error
 	fn := pass.TypesInfo.ObjectOf(sel.Sel)
 
-	// if strings.HasPrefix(fn.Pkg().Path(), "errchecktest") {
-	// 	return false
-	// }
-
-	// for _, globString := range config.IgnorePackageGlobs {
-	// 	g, err := glob.Compile(globString)
-	// 	if err != nil {
-	// 		log.Printf("unable to parse glob: %s\n", globString)
-	// 		os.Exit(1)
-	// 	}
-	//
-	// 	if g.Match(fn.Pkg().Path()) {
-	// 		return false
-	// 	}
-	// }
-
 	// If it's not a package name, then we should check the selector to make sure
 	// that it's an identifier from the same package
 	if pass.Pkg.Path() == fn.Pkg().Path() {
@@ -332,9 +311,8 @@ func isFromOtherPkg(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
 	return true
 }
 
-// prevErrAssign traverses the AST of a file looking for the most recent
-// assignment to an error declaration which is specified by the returnIdent
-// identifier.
+// prevErrAssign traverses the AST of a file looking for the all assignments
+// to an error declaration which is specified by the returnIdent identifier.
 //
 // This only returns short form assignments and reassignments, e.g. `:=` and
 // `=`. This does not include `var` statements. This function will return nil if
@@ -356,8 +334,7 @@ func prevErrAssign(pass *analysis.Pass, file *ast.File, returnIdent *ast.Ident) 
 				}
 				if assIdent, ok := expr.(*ast.Ident); ok {
 					if assIdent.Obj == nil || returnIdent.Obj == nil {
-						// If we can't find the Obj for one of the identifiers, just skip
-						// it.
+						// If we can't find the Obj for one of the identifiers, just skip it.
 						return true
 					} else if assIdent.Obj.Decl == returnIdent.Obj.Decl {
 						assigns = append(assigns, ass)
@@ -400,4 +377,18 @@ func extractFunc(typesInfo *types.Info, fun ast.Expr) *types.Func {
 		return fn
 	}
 	return nil
+}
+
+func reportUnwrapped(pass *analysis.Pass, call *ast.CallExpr, tokenPos token.Pos) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+
+	if isFromOtherPkg(pass, sel) {
+		pass.Reportf(tokenPos, "error returned from external package is not wrapped")
+		return
+	}
+
+	pass.Reportf(tokenPos, "error returned is not wrapped")
 }
