@@ -39,8 +39,10 @@ OUTER:
 			t.Fatalf("cannot run on non-directory: %s", f.Name())
 		}
 
+		Analyzer.Flags.Set("module", "two_packages_wrap_source")
+
 		t.Run(f.Name(), func(t *testing.T) {
-			analysistest.Run(t, analysistest.TestData(), NewAnalyzer(), f.Name()+"/...")
+			analysistest.Run(t, analysistest.TestData(), Analyzer, f.Name()+"/...")
 		})
 	}
 }

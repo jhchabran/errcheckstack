@@ -11,23 +11,48 @@ import (
 	"golang.org/x/tools/go/analysis"
 )
 
-func NewAnalyzer() *analysis.Analyzer {
-	return &analysis.Analyzer{
-		Name:       "errcheckstack",
-		Doc:        "Checks that errors are wrapped before reaching main functions",
-		Run:        run(),
-		ResultType: reflect.TypeOf(&Result{}),
-	}
+// Using analysis.Fact triggers the analyzer to load not only the given packages, but all
+// others that are imported. We definitely do not need to do that as there is no point in
+// checking those packages which aren't in the scope given to the analyzer (i.e ./...).
+var Analyzer = &analysis.Analyzer{
+	Name:       "errcheckstack",
+	Doc:        "Checks that errors are wrapped before reaching main functions",
+	Run:        run(),
+	ResultType: reflect.TypeOf(&Result{}),
+	FactTypes:  []analysis.Fact{new(isWrapped)},
 }
+
+var moduleName string
+
+func init() {
+	Analyzer.Flags.StringVar(&moduleName, "module", moduleName, "module to analyze")
+}
+
+type isWrapped struct{}
+
+func (w isWrapped) AFact() {}
 
 type Result struct {
-	funcs map[*types.Func]*wrappedCall
+	funcs map[string]*wrappedCall
 }
 
-func run() func(pass *analysis.Pass) (interface{}, error) {
+func run() func(*analysis.Pass) (interface{}, error) {
 	return func(pass *analysis.Pass) (interface{}, error) {
+		if moduleName == "" {
+			return nil, fmt.Errorf("no module name given")
+		}
+
+		pkgPath := pass.Pkg.Path()
+		fmt.Println(pkgPath, moduleName)
+		if !strings.HasPrefix(pkgPath, moduleName) {
+			// We don't care about this module, immediately return empty results
+			return &Result{}, nil
+		}
+
+		fmt.Println(pass.Pkg.Path())
+
 		res := &Result{
-			funcs: make(map[*types.Func]*wrappedCall),
+			funcs: make(map[string]*wrappedCall),
 		}
 		if _, err := scanErrorReturningFunctions(pass, res); err != nil {
 			return nil, err
@@ -35,7 +60,6 @@ func run() func(pass *analysis.Pass) (interface{}, error) {
 		if _, err := scanNonRecursivelyWrappedFunctions(pass, res); err != nil {
 			return nil, err
 		}
-
 		return res, nil
 	}
 }
@@ -92,6 +116,9 @@ func scanErrorReturningFunctions(pass *analysis.Pass, res *Result) (interface{},
 	var stack []*wrappedCall
 
 	for _, file := range pass.Files {
+		// Because we aren't going over the AST more than once, we don't use inspect.Inspector,
+		// which provides a speed up on the fifth traversal of the AST, which is not the case
+		// here as we're only going through it once.
 		ast.Inspect(file, func(n ast.Node) bool {
 			// printStack(stack)
 
@@ -229,7 +256,7 @@ func scanErrorReturningFunctions(pass *analysis.Pass, res *Result) (interface{},
 			// Type information may be incomplete.
 
 			fn, _ := pass.TypesInfo.Defs[lastFdecl.fdecl.Name].(*types.Func)
-			res.funcs[fn] = lastFdecl
+			res.funcs[fn.FullName()] = lastFdecl
 			return true
 		})
 	}
@@ -241,15 +268,20 @@ func scanErrorReturningFunctions(pass *analysis.Pass, res *Result) (interface{},
 // eliminate from the results functions which have their errors wrapped in the call tree.
 func scanNonRecursivelyWrappedFunctions(pass *analysis.Pass, res *Result) (interface{}, error) {
 	for fn, w := range res.funcs {
-		fmt.Println(fn.FullName(), w.String())
+		fmt.Println(fn, w.String())
 		fmt.Printf("%#v\n\n", fn)
 	}
+	fmt.Println("res----")
+	for fn := range res.funcs {
+		fmt.Println("\t", fn)
+	}
+	fmt.Println("res-end")
 
 	for fn := range res.funcs {
 		if !isWrappedAtSource(fn, res) {
-			fmt.Println("NOK ", fn.FullName(), "is returning unwrapped error")
+			fmt.Println("NOK ", fn, "is returning unwrapped error")
 		} else {
-			fmt.Println("OK  ", fn.FullName(), "is good")
+			fmt.Println("OK  ", fn, "is good")
 		}
 	}
 
@@ -368,11 +400,11 @@ func isFromOtherPkg(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
 	return true
 }
 
-func isWrappedAtSource(fn *types.Func, res *Result) bool {
-	fmt.Println("inspecting", fn.FullName())
+func isWrappedAtSource(fn string, res *Result) bool {
+	fmt.Println("inspecting", fn)
 	w, ok := res.funcs[fn]
 	if !ok {
-		fmt.Println("did not find", fn.FullName())
+		fmt.Println("did not find", fn)
 		fmt.Printf("%#v\n", fn)
 		return false
 	}
@@ -380,11 +412,11 @@ func isWrappedAtSource(fn *types.Func, res *Result) bool {
 	// Search in error sources until we find a non wrapped error, if any.
 	for _, es := range w.errSources {
 		if !es.wrapped {
-			if _, ok := res.funcs[es.fn]; ok {
+			if _, ok := res.funcs[es.fn.FullName()]; ok {
 				// The source function is not from any files in the pass and not wrapped.
 				return false
 			} else {
-				b := isWrappedAtSource(es.fn, res)
+				b := isWrappedAtSource(es.fn.FullName(), res)
 				fmt.Println("found call to", es.fn.FullName(), b)
 				return b
 			}

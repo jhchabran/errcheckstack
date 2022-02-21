@@ -6,5 +6,5 @@ import (
 )
 
 func main() {
-	singlechecker.Main(errcheckstack.NewAnalyzer())
+	singlechecker.Main(errcheckstack.Analyzer)
 }
