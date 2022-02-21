@@ -38,9 +38,12 @@ OUTER:
 			t.Fatalf("cannot run on non-directory: %s", f.Name())
 		}
 
-		Analyzer.Flags.Set("module", f.Name())
+		cfg := Config{
+			WrappingSignatures: []string{"github.com/cockroachdb/errors.WithStack"},
+			ModuleName:         f.Name(),
+		}
 		t.Run(f.Name(), func(t *testing.T) {
-			analysistest.Run(t, analysistest.TestData(), Analyzer, f.Name()+"/...")
+			analysistest.Run(t, analysistest.TestData(), NewAnalyzer(cfg), f.Name()+"/...")
 		})
 	}
 }

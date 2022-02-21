@@ -6,5 +6,8 @@ import (
 )
 
 func main() {
-	singlechecker.Main(errcheckstack.Analyzer)
+	singlechecker.Main(errcheckstack.NewAnalyzer(errcheckstack.Config{
+		ModuleName:         "TODO",
+		WrappingSignatures: []string{"github.com/cockroachdb/errors.WithStack"},
+	}))
 }

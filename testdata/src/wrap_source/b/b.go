@@ -10,5 +10,5 @@ func B() error { // want B:"wrapped"
 }
 
 func Canary() error { // want Canary:"unwrapped"
-	return fmt.Errorf("canary") // want `is not wrapped`
+	return fmt.Errorf("canary") // want `error returned is not wrapped`
 }

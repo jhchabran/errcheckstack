@@ -10,22 +10,26 @@ import (
 	"golang.org/x/tools/go/analysis"
 )
 
-// Using analysis.Fact triggers the analyzer to load not only the given packages, but all
-// others that are imported. We definitely do not need to do that as there is no point in
-// checking those packages which aren't in the scope given to the analyzer (i.e ./...).
-var Analyzer = &analysis.Analyzer{
-	Name:      "errcheckstack",
-	Doc:       "Checks that errors are wrapped before reaching main functions",
-	Run:       run(),
-	FactTypes: []analysis.Fact{new(wrapFact)},
+type Config struct {
+	// WrappingSignatures defines what function signature is considered
+	// as error wrapping. So errors return by these functions will not
+	// create a diagnostic.
+	WrappingSignatures []string `yaml:"wrappingSignatures"`
+	// In order to function, this analyzer requires to be passed a module name so it avoids
+	// inspecting any other packages than the ones in that module.
+	ModuleName string `yaml:"moduleName"`
 }
 
-var moduleName string
-
-func init() {
-	Analyzer.Flags.StringVar(&moduleName, "module", moduleName, "module to analyze")
+func NewAnalyzer(cfg Config) *analysis.Analyzer {
+	return &analysis.Analyzer{
+		Name:      "errcheckstack",
+		Doc:       "Checks that errors are wrapped before reaching main functions",
+		Run:       run(cfg),
+		FactTypes: []analysis.Fact{new(wrapFact)},
+	}
 }
 
+// wrapFact represents if an object is wrapped or not.
 type wrapFact struct {
 	isWrapped bool
 }
@@ -40,22 +44,23 @@ func (w wrapFact) String() string {
 	}
 }
 
-func run() func(*analysis.Pass) (interface{}, error) {
+func run(cfg Config) func(*analysis.Pass) (interface{}, error) {
 	return func(pass *analysis.Pass) (interface{}, error) {
-		if moduleName == "" {
+		if cfg.ModuleName == "" {
+			// The analyzer cannot work without a given module to scope the search,
+			// otherwise we would raise tons of diagnostics from the dependencies
+			// which we do not want to raise.
 			return nil, fmt.Errorf("no module name given")
 		}
 
+		// Check if the current package is to be searched or not.
 		pkgPath := pass.Pkg.Path()
-		if !strings.HasPrefix(pkgPath, moduleName) {
+		if !strings.HasPrefix(pkgPath, cfg.ModuleName) {
 			// We don't care about this module, immediately return empty results
 			return nil, nil
 		}
 
-		if _, err := scanErrorReturningFunctions(pass); err != nil {
-			return nil, err
-		}
-		return nil, nil
+		return scan(&cfg, pass)
 	}
 }
 
@@ -94,20 +99,18 @@ func (wc *wrappedCall) IsWrapped() bool {
 	return true
 }
 
-// scanErrorReturningFunctions scans the entire package to find functions that return errors
+// scan scans the entire package to find functions that return errors
 // and put them in two groups: those who are wrapping their errors and those who don't.
 //
 // Functions from external packages are always considered to be unwrapped.
-func scanErrorReturningFunctions(pass *analysis.Pass) (interface{}, error) {
-	var stack []*wrappedCall
+func scan(cfg *Config, pass *analysis.Pass) (interface{}, error) {
+	var curFdecl *wrappedCall
 
 	for _, file := range pass.Files {
 		// Because we aren't going over the AST more than once, we don't use inspect.Inspector,
 		// which provides a speed up on the fifth traversal of the AST, which is not the case
 		// here as we're only going through it once.
 		ast.Inspect(file, func(n ast.Node) bool {
-			// printStack(stack)
-
 			// Looking at a function declaration, take note and add it to the stack
 			if fdecl, ok := n.(*ast.FuncDecl); ok {
 				if fdecl.Type.Results == nil {
@@ -124,30 +127,16 @@ func scanErrorReturningFunctions(pass *analysis.Pass) (interface{}, error) {
 					if pass.TypesInfo.TypeOf(r.Type).String() == "error" {
 						// The function returns an error, it's a candidate for a check and
 						// we add it to the stack.
-						stack = append(stack, &wrappedCall{fdecl: fdecl})
+						curFdecl = &wrappedCall{fdecl: fdecl}
 						return true
 					}
 				}
 			}
 
-			var lastFdecl *wrappedCall
-			if len(stack) > 0 {
-				lastFdecl = stack[len(stack)-1]
-			} else {
+			if curFdecl == nil {
 				// We are not inside a function, continue exploring the ast until we find one.
 				return true
 			}
-
-			// if ident, ok := n.(*ast.Ident); ok {
-			// 	if shortAss := prevErrAssign(pass, file, ident); shortAss != nil {
-			// 		call, cok := shortAss.Rhs[0].(*ast.CallExpr)
-			// 		if !cok {
-			// 			return true
-			// 		}
-			// 		b := checkUnwrapped(pass, call, ident.Pos())
-			// 		lastFdecl.errSources = append(lastFdecl.errSources, &errorSource{wrapped: b, n: call})
-			// 	}
-			// }
 
 			// Looking at a return statement, search if it includes an error, if yes
 			// check if that error is wrapped.
@@ -161,29 +150,30 @@ func scanErrorReturningFunctions(pass *analysis.Pass) (interface{}, error) {
 						// match an error within multiple return values, for that, the below
 						// tuple check is required.
 						if isError(pass.TypesInfo.TypeOf(expr)) {
-							b := checkUnwrapped(pass, retFn, retFn.Pos())
+							b := checkUnwrapped(cfg, pass, retFn, retFn.Pos())
 							if !b {
-								pass.Reportf(retFn.Pos(), "is not wrapped")
+								pass.Reportf(retFn.Pos(), "error returned is not wrapped")
 							}
 							fn := extractFunc(pass.TypesInfo, retFn.Fun)
-							ffn, ok := pass.TypesInfo.ObjectOf(lastFdecl.fdecl.Name).(*types.Func)
+							callerFn, ok := pass.TypesInfo.ObjectOf(curFdecl.fdecl.Name).(*types.Func)
 							if ok {
-								pass.ExportObjectFact(ffn, &wrapFact{isWrapped: b && lastFdecl.IsWrapped()})
+								pass.ExportObjectFact(callerFn, &wrapFact{isWrapped: b && curFdecl.IsWrapped()})
 							}
-							lastFdecl.errSources = append(lastFdecl.errSources, &errorSource{wrapped: b, n: n, fn: fn})
+							curFdecl.errSources = append(curFdecl.errSources, &errorSource{wrapped: b, n: n, fn: fn})
 							return true
 						}
 					}
 
+					// Check if that element of the return tuple is an error.
 					if !isError(pass.TypesInfo.TypeOf(expr)) {
 						continue
 					}
 
+					// It is an error. Let's find where it's been assigned, so we can check it.
 					ident, iok := expr.(*ast.Ident)
 					if !iok {
 						return true
 					}
-
 					var call *ast.CallExpr
 
 					// Attempt to find the most recent short assign
@@ -194,11 +184,9 @@ func scanErrorReturningFunctions(pass *analysis.Pass) (interface{}, error) {
 							if !ok {
 								return true
 							}
-							b := checkUnwrapped(pass, call, ident.NamePos)
+							b := checkUnwrapped(cfg, pass, call, ident.NamePos)
 							fn := extractFunc(pass.TypesInfo, call.Fun)
-							// fmt.Println(lastFdecl.fdecl.Name)
-							// fmt.Println(fn.String())
-							lastFdecl.errSources = append(lastFdecl.errSources, &errorSource{wrapped: b, n: n, fn: fn})
+							curFdecl.errSources = append(curFdecl.errSources, &errorSource{wrapped: b, n: n, fn: fn})
 							pass.ExportObjectFact(fn, &wrapFact{isWrapped: b})
 						} else if isUnresolved(file, ident) {
 							// TODO Check if the identifier is unresolved, and try to resolve it in
@@ -240,9 +228,9 @@ func scanErrorReturningFunctions(pass *analysis.Pass) (interface{}, error) {
 					if call == nil {
 						return true
 					}
-					b := checkUnwrapped(pass, call, ident.NamePos)
+					b := checkUnwrapped(cfg, pass, call, ident.NamePos)
 					fn := extractFunc(pass.TypesInfo, call.Fun)
-					lastFdecl.errSources = append(lastFdecl.errSources, &errorSource{wrapped: b, n: n, fn: fn})
+					curFdecl.errSources = append(curFdecl.errSources, &errorSource{wrapped: b, n: n, fn: fn})
 					pass.ExportObjectFact(fn, &wrapFact{isWrapped: b})
 				}
 			}
@@ -266,15 +254,16 @@ func isError(typ types.Type) bool {
 	return typ.String() == "error"
 }
 
-func checkUnwrapped(pass *analysis.Pass, call *ast.CallExpr, tokenPos token.Pos) bool {
+func checkUnwrapped(cfg *Config, pass *analysis.Pass, call *ast.CallExpr, tokenPos token.Pos) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return false
 	}
 	fn := pass.TypesInfo.ObjectOf(sel.Sel).(*types.Func)
-	fnSig := fn.String()
-	if fnSig == "func github.com/cockroachdb/errors.WithStack(err error) error" {
-		return true
+	for _, fullname := range cfg.WrappingSignatures {
+		if fn.FullName() == fullname {
+			return true
+		}
 	}
 
 	fact := wrapFact{}
@@ -305,38 +294,6 @@ func checkUnwrapped(pass *analysis.Pass, call *ast.CallExpr, tokenPos token.Pos)
 	}
 
 	return false
-}
-
-// Report unwrapped takes a call expression and an identifier and reports
-// if the call is unwrapped.
-func reportUnwrapped(pass *analysis.Pass, call *ast.CallExpr, tokenPos token.Pos) {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return
-	}
-
-	// Check for ignored signatures
-	fnSig := pass.TypesInfo.ObjectOf(sel.Sel).String()
-	// if contains(cfg.IgnoreSigs, fnSig) {
-	// 	return
-	// } else if containsMatch(cfg.IgnoreSigRegexps, fnSig) {
-	// 	return
-	// }
-
-	// Check if the underlying type of the "x" in x.y.z is an interface, as
-	// errors returned from interface types should be wrapped.
-	if isInterface(pass, sel) {
-		pass.Reportf(tokenPos, "error returned from interface method should be wrapped: sig: %s", fnSig)
-		return
-	}
-
-	// Check whether the function being called comes from another package,
-	// as functions called across package boundaries which returns errors
-	// should be wrapped
-	if isFromOtherPkg(pass, sel) {
-		pass.Reportf(tokenPos, "error returned from external package is unwrapped: sig: %s", fnSig)
-		return
-	}
 }
 
 // isInterface returns whether the function call is one defined on an interface.
@@ -412,18 +369,6 @@ func prevErrAssign(pass *analysis.Pass, file *ast.File, returnIdent *ast.Ident) 
 		return true
 	})
 
-	// Iterate through the assignments, comparing the token positions to
-	// find the assignment that directly precedes the return position
-	// var mostRecentAssign *ast.AssignStmt
-	//
-	// for _, ass := range assigns {
-	// 	if ass.Pos() > returnIdent.Pos() {
-	// 		break
-	// 	}
-	// 	mostRecentAssign = ass
-	// }
-
-	// return mostRecentAssign
 	return assigns
 }
 
@@ -433,7 +378,6 @@ func contains(slice []string, el string) bool {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -443,7 +387,6 @@ func isUnresolved(file *ast.File, ident *ast.Ident) bool {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -452,7 +395,6 @@ func extractFunc(typesInfo *types.Info, fun ast.Expr) *types.Func {
 	if !ok {
 		return nil
 	}
-
 	fn, ok := typesInfo.ObjectOf(sel.Sel).(*types.Func)
 	if ok {
 		return fn
