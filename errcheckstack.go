@@ -187,7 +187,15 @@ func scan(cfg *Config, pass *analysis.Pass) (interface{}, error) {
 							b := checkUnwrapped(cfg, pass, call, ident.NamePos)
 							fn := extractFunc(pass.TypesInfo, call.Fun)
 							curFdecl.errSources = append(curFdecl.errSources, &errorSource{wrapped: b, n: n, fn: fn})
-							pass.ExportObjectFact(fn, &wrapFact{isWrapped: b})
+							if !b {
+								reportUnwrapped(pass, call, ident.NamePos)
+							}
+							sel, ok := call.Fun.(*ast.SelectorExpr)
+							if ok {
+								if !isFromOtherPkg(pass, sel) {
+									pass.ExportObjectFact(fn, &wrapFact{isWrapped: b})
+								}
+							}
 						} else if isUnresolved(file, ident) {
 							// TODO Check if the identifier is unresolved, and try to resolve it in
 							// another file.
@@ -231,7 +239,16 @@ func scan(cfg *Config, pass *analysis.Pass) (interface{}, error) {
 					b := checkUnwrapped(cfg, pass, call, ident.NamePos)
 					fn := extractFunc(pass.TypesInfo, call.Fun)
 					curFdecl.errSources = append(curFdecl.errSources, &errorSource{wrapped: b, n: n, fn: fn})
-					pass.ExportObjectFact(fn, &wrapFact{isWrapped: b})
+					// sel, ok := call.Fun.(*ast.SelectorExpr)
+					callerFn, ok := pass.TypesInfo.ObjectOf(curFdecl.fdecl.Name).(*types.Func)
+					if ok {
+						pass.ExportObjectFact(callerFn, &wrapFact{isWrapped: b && curFdecl.IsWrapped()})
+					}
+					// if ok {
+					// 	if !isFromOtherPkg(pass, sel) {
+					// 		pass.ExportObjectFact(fn, &wrapFact{isWrapped: b})
+					// 	}
+					// }
 				}
 			}
 
@@ -270,9 +287,10 @@ func checkUnwrapped(cfg *Config, pass *analysis.Pass, call *ast.CallExpr, tokenP
 
 	// Check if that function call is marked as wrapped by a previous pass.
 	fact := wrapFact{}
-	pass.ImportObjectFact(fn, &fact)
-	if fact.isWrapped {
-		return true
+	if ok := pass.ImportObjectFact(fn, &fact); ok {
+		if fact.isWrapped {
+			return true
+		}
 	}
 
 	// Check if the underlying type of the "x" in x.y.z is an interface, as

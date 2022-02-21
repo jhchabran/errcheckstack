@@ -14,11 +14,10 @@ func main() {
 	}
 }
 
-func do() error {
+func do() error { // want do:"wrapped"
 	_, err := json.Marshal(struct{}{})
 	if err != nil {
 		return errors.WithStack(err)
-		// return err
 	}
 
 	return nil
