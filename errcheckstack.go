@@ -65,13 +65,12 @@ func run(cfg Config) func(*analysis.Pass) (interface{}, error) {
 }
 
 type errorSource struct {
-	n       ast.Node
 	fn      *types.Func
 	wrapped bool
 }
 
 func (es *errorSource) String() string {
-	return fmt.Sprintf("%v -> %#v (%#v) ", es.wrapped, es.fn.String(), es.n)
+	return fmt.Sprintf("%v -> %#v", es.wrapped, es.fn.String())
 }
 
 type wrappedCall struct {
@@ -159,7 +158,7 @@ func scan(cfg *Config, pass *analysis.Pass) (interface{}, error) {
 							if ok {
 								pass.ExportObjectFact(callerFn, &wrapFact{isWrapped: b && curFdecl.IsWrapped()})
 							}
-							curFdecl.errSources = append(curFdecl.errSources, &errorSource{wrapped: b, n: n, fn: fn})
+							curFdecl.errSources = append(curFdecl.errSources, &errorSource{wrapped: b, fn: fn})
 							return true
 						}
 					}
@@ -186,7 +185,7 @@ func scan(cfg *Config, pass *analysis.Pass) (interface{}, error) {
 							}
 							b := checkUnwrapped(cfg, pass, call, ident.NamePos)
 							fn := extractFunc(pass.TypesInfo, call.Fun)
-							curFdecl.errSources = append(curFdecl.errSources, &errorSource{wrapped: b, n: n, fn: fn})
+							curFdecl.errSources = append(curFdecl.errSources, &errorSource{wrapped: b, fn: fn})
 							if !b {
 								reportUnwrapped(pass, call, ident.NamePos)
 							}
@@ -238,7 +237,7 @@ func scan(cfg *Config, pass *analysis.Pass) (interface{}, error) {
 					}
 					b := checkUnwrapped(cfg, pass, call, ident.NamePos)
 					fn := extractFunc(pass.TypesInfo, call.Fun)
-					curFdecl.errSources = append(curFdecl.errSources, &errorSource{wrapped: b, n: n, fn: fn})
+					curFdecl.errSources = append(curFdecl.errSources, &errorSource{wrapped: b, fn: fn})
 					// sel, ok := call.Fun.(*ast.SelectorExpr)
 					callerFn, ok := pass.TypesInfo.ObjectOf(curFdecl.fdecl.Name).(*types.Func)
 					if ok {
