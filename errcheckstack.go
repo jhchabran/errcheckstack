@@ -40,7 +40,7 @@ func (w wrapFact) String() string {
 	if w.isWrapped {
 		return "wrapped"
 	} else {
-		return "unwrapped"
+		return "naked"
 	}
 }
 
@@ -149,13 +149,14 @@ func scan(cfg *Config, pass *analysis.Pass) (interface{}, error) {
 						// match an error within multiple return values, for that, the below
 						// tuple check is required.
 						if isError(pass.TypesInfo.TypeOf(expr)) {
-							b := checkUnwrapped(cfg, pass, retFn, retFn.Pos())
+							b := checkWrapped(cfg, pass, retFn, retFn.Pos())
 							if !b {
 								reportUnwrapped(pass, retFn, retFn.Pos())
 							}
 							fn := extractFunc(pass.TypesInfo, retFn.Fun)
 							callerFn, ok := pass.TypesInfo.ObjectOf(curFdecl.fdecl.Name).(*types.Func)
 							if ok {
+								fmt.Println("wrapped: ", b && curFdecl.IsWrapped())
 								pass.ExportObjectFact(callerFn, &wrapFact{isWrapped: b && curFdecl.IsWrapped()})
 							}
 							curFdecl.errSources = append(curFdecl.errSources, &errorSource{wrapped: b, fn: fn})
@@ -183,7 +184,7 @@ func scan(cfg *Config, pass *analysis.Pass) (interface{}, error) {
 							if !ok {
 								return true
 							}
-							b := checkUnwrapped(cfg, pass, call, ident.NamePos)
+							b := checkWrapped(cfg, pass, call, ident.NamePos)
 							fn := extractFunc(pass.TypesInfo, call.Fun)
 							curFdecl.errSources = append(curFdecl.errSources, &errorSource{wrapped: b, fn: fn})
 							if !b {
@@ -231,23 +232,17 @@ func scan(cfg *Config, pass *analysis.Pass) (interface{}, error) {
 					}
 
 					// Make sure there is a call identified as producing the error being
-					// returned, otherwise just bail
+					// returned, otherwise just bail.
 					if call == nil {
 						return true
 					}
-					b := checkUnwrapped(cfg, pass, call, ident.NamePos)
+					b := checkWrapped(cfg, pass, call, ident.NamePos)
 					fn := extractFunc(pass.TypesInfo, call.Fun)
 					curFdecl.errSources = append(curFdecl.errSources, &errorSource{wrapped: b, fn: fn})
-					// sel, ok := call.Fun.(*ast.SelectorExpr)
 					callerFn, ok := pass.TypesInfo.ObjectOf(curFdecl.fdecl.Name).(*types.Func)
 					if ok {
 						pass.ExportObjectFact(callerFn, &wrapFact{isWrapped: b && curFdecl.IsWrapped()})
 					}
-					// if ok {
-					// 	if !isFromOtherPkg(pass, sel) {
-					// 		pass.ExportObjectFact(fn, &wrapFact{isWrapped: b})
-					// 	}
-					// }
 				}
 			}
 
@@ -270,7 +265,7 @@ func isError(typ types.Type) bool {
 	return typ.String() == "error"
 }
 
-func checkUnwrapped(cfg *Config, pass *analysis.Pass, call *ast.CallExpr, tokenPos token.Pos) bool {
+func checkWrapped(cfg *Config, pass *analysis.Pass, call *ast.CallExpr, tokenPos token.Pos) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return false
@@ -295,8 +290,7 @@ func checkUnwrapped(cfg *Config, pass *analysis.Pass, call *ast.CallExpr, tokenP
 	// Check if the underlying type of the "x" in x.y.z is an interface, as
 	// errors returned from interface types should be wrapped.
 	if isInterface(pass, sel) {
-		// TODO
-		return true
+		return false
 	}
 
 	// Check whether the function being called comes from another package,
@@ -311,7 +305,6 @@ func checkUnwrapped(cfg *Config, pass *analysis.Pass, call *ast.CallExpr, tokenP
 // isInterface returns whether the function call is one defined on an interface.
 func isInterface(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
 	_, ok := pass.TypesInfo.TypeOf(sel.X).Underlying().(*types.Interface)
-
 	return ok
 }
 
@@ -399,6 +392,11 @@ func extractFunc(typesInfo *types.Info, fun ast.Expr) *types.Func {
 func reportUnwrapped(pass *analysis.Pass, call *ast.CallExpr, tokenPos token.Pos) {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
+		return
+	}
+
+	if isInterface(pass, sel) {
+		pass.Reportf(tokenPos, "error returned from interface type is not wrapped")
 		return
 	}
 

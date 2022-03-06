@@ -2,11 +2,12 @@ package b
 
 import (
 	"fmt"
-	"wrap_source/a"
+	"interface_no_wrap/a"
 )
 
-func B() error { // want B:"wrapped"
-	return a.A()
+func B(aer a.Aer) error { // want B:"naked"
+	err := aer.A()
+	return err // want `error returned from interface type is not wrapped`
 }
 
 func Canary() error { // want Canary:"naked"

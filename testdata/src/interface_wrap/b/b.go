@@ -2,11 +2,15 @@ package b
 
 import (
 	"fmt"
-	"wrap_source/a"
+
+	"github.com/cockroachdb/errors"
+
+	"interface_wrap/a"
 )
 
-func B() error { // want B:"wrapped"
-	return a.A()
+func B(aer a.Aer) error { // want B:"wrapped"
+	err := aer.A()
+	return errors.WithStack(err)
 }
 
 func Canary() error { // want Canary:"naked"
